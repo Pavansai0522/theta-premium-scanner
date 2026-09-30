@@ -1,0 +1,67 @@
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: theta-premium-scanner
+  thymeleaf:
+    cache: false
+
+server:
+  port: ${PORT:8080}
+  compression:
+    enabled: true
+    mime-types: text/html,text/css,application/javascript,application/json
+
+alpaca:
+  # Never hard-code credentials: they are read from the environment only.
+  api-key: ${ALPACA_API_KEY:}
+  api-secret: ${ALPACA_API_SECRET:}
+  data-base-url: ${ALPACA_DATA_URL:https://data.alpaca.markets}
+  trading-base-url: ${ALPACA_TRADING_URL:https://paper-api.alpaca.markets}
+  options-feed: ${ALPACA_OPTIONS_FEED:indicative}
+  stock-feed: ${ALPACA_STOCK_FEED:iex}
+  page-limit: 1000            # Alpaca max for option snapshots
+  contracts-page-limit: 10000 # Alpaca max for option contracts
+  max-pages: 200              # safety valve against runaway pagination
+  max-retries: 3              # retries for 429 / 5xx / network errors
+  initial-backoff: 500ms
+  max-backoff: 10s
+  connect-timeout: 5s
+  read-timeout: 30s
+  cache-ttl: 20s              # short on purpose: quotes move; 0s disables caching
+
+scanner:
+  # Default strategy parameters shown in the UI and used when a request omits a value.
+  # Every one of these can be overridden per request (form field or query parameter).
+  defaults:
+    min-delta: 0.05
+    max-delta: 0.15
+    min-theta: 0.015
+    min-dte: 7
+    max-dte: 45
+    min-premium: 0.20        # minimum mid price per leg
+    max-spread: 0.20         # maximum ask - bid per leg
+    min-open-interest: 500
+    min-volume: 0
+    min-total-premium: 0.00  # minimum combined strangle credit (mid)
+    top-n: 25
+  # Ranking weights (normalised internally, so they need not sum to 1).
+  weights:
+    premium: 0.25
+    theta: 0.15
+    delta: 0.15
+    cushion: 0.20
+    liquidity: 0.15
+    dte-fit: 0.05
+    balance: 0.05
+  liquidity:
+    open-interest-reference: 10000  # OI at which the OI score saturates at 1.0
+    volume-reference: 5000          # volume at which the volume score saturates at 1.0
+    max-spread-pct-of-mid: 0.50     # spread/mid at which the spread score reaches 0
+  chain:
+    default-max-dte: 45
+    strike-window-pct: 0.15         # chain display: strikes within +/-15% of spot (0 = all strikes)
+  pairing:
+    max-legs-per-side: 25           # best legs per side per expiration considered for pairing
+    target-cushion: 1.25            # breakeven distance, in expected moves, that earns a full cushion score
+    max-per-expiration: 5           # max pairs per expiration

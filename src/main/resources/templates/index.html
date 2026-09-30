@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${#strings.isEmpty(symbol)} ? 'Theta Premium Scanner' : ${symbol + ' short strangle scan'}">Theta Premium Scanner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" th:href="@{/css/app.css}" href="/css/app.css">
+</head>
+<body>
+
+<header class="masthead">
+    <a class="brand" th:href="@{/}" href="/">
+        <span class="brand-mark" aria-hidden="true">θ</span>
+        <span class="brand-name">Theta Premium Scanner</span>
+    </a>
+    <p class="brand-note">Analysis only. This app never places orders.</p>
+</header>
+
+<form class="scan-form" method="get" th:action="@{/scan}" action="/scan">
+    <div class="ticker-row">
+        <label class="ticker-field">
+            <span class="field-label">Underlying</span>
+            <input id="symbol" name="symbol" type="text" th:value="${symbol}" placeholder="SPY"
+                   autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="10" required>
+        </label>
+        <div class="quick-picks" role="group" aria-label="Scan a common underlying">
+            <button type="button" class="chip" data-symbol="SPY">SPY</button>
+            <button type="button" class="chip" data-symbol="QQQ">QQQ</button>
+            <button type="button" class="chip" data-symbol="AAPL">AAPL</button>
+            <button type="button" class="chip" data-symbol="NVDA">NVDA</button>
+            <button type="button" class="chip" data-symbol="TSLA">TSLA</button>
+        </div>
+        <button class="primary" type="submit">Scan</button>
+        <div class="spot" th:if="${spot != null}">
+            <span class="spot-symbol" th:text="${symbol}">SPY</span>
+            <span class="spot-price" th:text="${@fmt.price(spot)}">650.00</span>
+            <span class="spot-meta" th:if="${priceNote != null}" th:text="${priceNote}">latest trade</span>
+        </div>
+    </div>
+
+    <fieldset class="params">
+        <legend>Strategy parameters</legend>
+        <div class="param-grid">
+            <label><span class="field-label">Min delta</span>
+                <input name="minDelta" type="number" step="0.005" min="0.005" max="0.49" th:value="${params?.minDelta()}"></label>
+            <label><span class="field-label">Max delta</span>
+                <input name="maxDelta" type="number" step="0.005" min="0.005" max="0.49" th:value="${params?.maxDelta()}"></label>
+            <label><span class="field-label">Min |theta|</span>
+                <input name="minTheta" type="number" step="0.001" min="0" th:value="${params?.minTheta()}"></label>
+            <label><span class="field-label">Min DTE</span>
+                <input name="minDte" type="number" step="1" min="0" th:value="${params?.minDte()}"></label>
+            <label><span class="field-label">Max DTE</span>
+                <input name="maxDte" type="number" step="1" min="0" max="1095" th:value="${params?.maxDte()}"></label>
+            <label><span class="field-label">Min premium / leg</span>
+                <input name="minPremium" type="number" step="0.01" min="0" th:value="${params?.minPremium()}"></label>
+            <label><span class="field-label">Max bid/ask spread</span>
+                <input name="maxSpread" type="number" step="0.01" min="0.01" th:value="${params?.maxSpread()}"></label>
+            <label><span class="field-label">Min open interest</span>
+                <input name="minOpenInterest" type="number" step="1" min="0" th:value="${params?.minOpenInterest()}"></label>
+            <label><span class="field-label">Min volume</span>
+                <input name="minVolume" type="number" step="1" min="0" th:value="${params?.minVolume()}"></label>
+            <label><span class="field-label">Min total credit</span>
+                <input name="minTotalPremium" type="number" step="0.01" min="0" th:value="${params?.minTotalPremium()}"></label>
+            <label><span class="field-label">Results shown</span>
+                <input name="topN" type="number" step="1" min="1" max="200" th:value="${params?.topN()}"></label>
+        </div>
+    </fieldset>
+</form>
+
+<main>
+    <div class="alert" th:if="${error != null}" role="alert">
+        <strong>Scan stopped.</strong> <span th:text="${error}">Message</span>
+    </div>
+    <ul class="notes" th:if="${!#lists.isEmpty(warnings)}">
+        <li th:each="w : ${warnings}" th:text="${w}">Warning</li>
+    </ul>
+
+    <section class="empty" th:if="${#strings.isEmpty(symbol) and error == null}">
+        <h1>Find deep out-of-the-money strangles worth selling.</h1>
+        <p>Enter a ticker to load its option chain from Alpaca. The scanner filters calls and puts by delta, theta,
+            DTE and liquidity, pairs them by expiration, and ranks the pairs by premium, decay, distance and fill quality.</p>
+    </section>
+
+    <!-- ======================= Section A: option chain ======================= -->
+    <section class="panel" id="chain" th:if="${chain != null}" aria-labelledby="chain-title">
+        <div class="panel-head">
+            <div>
+                <h2 id="chain-title">Option chain</h2>
+                <p class="panel-sub"
+                   th:text="${chain.totalContracts() + ' contracts, ' + #lists.size(chain.expirations()) + ' expirations, ' + @fmt.windowLabel(strikeWindowPct) + '. Feed: ' + chain.feed() + '.'}">
+                    summary</p>
+            </div>
+            <div class="panel-actions">
+                <button type="button" class="ghost" data-expand="none">Collapse all</button>
+            </div>
+        </div>
+        <div class="chain-scroll">
+            <table class="chain">
+                <colgroup>
+                    <col class="c-ask"><col class="c-theta"><col class="c-bid">
+                    <col class="c-strike">
+                    <col class="c-bid"><col class="c-theta"><col class="c-ask">
+                </colgroup>
+                <thead>
+                <tr class="side-head">
+                    <th colspan="3" scope="colgroup" class="calls-head">Calls</th>
+                    <th scope="col" class="strike-head">Strike</th>
+                    <th colspan="3" scope="colgroup" class="puts-head">Puts</th>
+                </tr>
+                <tr class="col-head">
+                    <th scope="col">Ask</th><th scope="col">Theta</th><th scope="col">Bid</th>
+                    <th scope="col" class="strike-head"><span class="visually-hidden">Strike</span></th>
+                    <th scope="col">Bid</th><th scope="col">Theta</th><th scope="col">Ask</th>
+                </tr>
+                </thead>
+                <th:block th:each="g, gs : ${chain.expirations()}">
+                    <tbody class="exp-head">
+                    <tr class="exp-row" tabindex="0" role="button"
+                        th:attr="data-group=${gs.index},aria-expanded=${gs.first},aria-controls=${'group-' + gs.index}">
+                        <td colspan="3" class="exp-left">
+                            <span class="exp-date" th:text="${g.label()}">21 Aug 26</span>
+                            <span class="exp-mult" th:text="${g.multiplier()}">100</span>
+                            <span class="exp-side">Calls</span>
+                        </td>
+                        <td class="exp-dte"><span th:text="${g.dte() + 'D'}">12D</span></td>
+                        <td colspan="3" class="exp-right">
+                            <span class="exp-side">Puts</span>
+                            <span class="caret" aria-hidden="true"></span>
+                        </td>
+                    </tr>
+                    </tbody>
+                    <tbody class="exp-body" th:id="${'group-' + gs.index}" th:hidden="${!gs.first}">
+                    <th:block th:each="row, rs : ${g.rows()}">
+                        <tr class="spot-line" th:if="${rs.index == g.spotRowIndex()}">
+                            <td colspan="7"><span th:text="${chain.symbol() + ' ' + @fmt.price(chain.underlyingPrice())}">SPY 650.00</span></td>
+                        </tr>
+                        <tr class="strike-row" th:classappend="${rs.odd} ? 'alt'"
+                            th:attr="data-call=${row.call() != null ? row.call().symbol() : null},data-put=${row.put() != null ? row.put().symbol() : null}">
+                            <td class="c-cell ask" th:classappend="${row.callInTheMoney()} ? 'itm'"
+                                th:text="${row.call() != null ? @fmt.price(row.call().quote().ask()) : ''}">0.40</td>
+                            <td class="c-cell theta" th:classappend="${row.callInTheMoney()} ? 'itm'"
+                                th:title="${row.call() != null and !row.call().greeks().hasDeltaAndTheta()} ? 'Greeks unavailable from Alpaca'"
+                                th:text="${row.call() != null ? @fmt.theta(row.call().greeks().theta()) : ''}">-0.0180</td>
+                            <td class="c-cell bid" th:classappend="${row.callInTheMoney()} ? 'itm'"
+                                th:text="${row.call() != null ? @fmt.price(row.call().quote().bid()) : ''}">0.35</td>
+                            <td class="strike-cell" th:text="${@fmt.strike(row.strike())}">$680</td>
+                            <td class="p-cell bid" th:classappend="${row.putInTheMoney()} ? 'itm'"
+                                th:text="${row.put() != null ? @fmt.price(row.put().quote().bid()) : ''}">0.28</td>
+                            <td class="p-cell theta" th:classappend="${row.putInTheMoney()} ? 'itm'"
+                                th:title="${row.put() != null and !row.put().greeks().hasDeltaAndTheta()} ? 'Greeks unavailable from Alpaca'"
+                                th:text="${row.put() != null ? @fmt.theta(row.put().greeks().theta()) : ''}">-0.0160</td>
+                            <td class="p-cell ask" th:classappend="${row.putInTheMoney()} ? 'itm'"
+                                th:text="${row.put() != null ? @fmt.price(row.put().quote().ask()) : ''}">0.32</td>
+                        </tr>
+                    </th:block>
+                    <tr class="spot-line" th:if="${g.spotRowIndex() == #lists.size(g.rows())}">
+                        <td colspan="7"><span th:text="${chain.symbol() + ' ' + @fmt.price(chain.underlyingPrice())}">SPY</span></td>
+                    </tr>
+                    </tbody>
+                </th:block>
+            </table>
+        </div>
+        <p class="legend">Shaded cells are in the money. A dash means Alpaca returned no value for that field.</p>
+    </section>
+    <div class="alert soft" th:if="${chain == null and chainError != null and error == null}" th:text="${chainError}">chain error</div>
+
+    <!-- ======================= Section B: short strangle scanner ======================= -->
+    <section class="panel" id="scanner" th:if="${scan != null}" aria-labelledby="scanner-title">
+        <div class="panel-head">
+            <div>
+                <h2 id="scanner-title">Recommended Short Strangle Candidates</h2>
+                <p class="panel-sub">Ranked by overall score. Select a row to see full details; its legs are outlined in the chain.</p>
+            </div>
+        </div>
+
+        <dl class="funnel">
+            <div><dt>OTM calls fetched</dt><dd th:text="${scan.callsEvaluated()}">0</dd></div>
+            <div><dt>Calls passing filters</dt><dd th:text="${scan.eligibleCalls()}">0</dd></div>
+            <div><dt>OTM puts fetched</dt><dd th:text="${scan.putsEvaluated()}">0</dd></div>
+            <div><dt>Puts passing filters</dt><dd th:text="${scan.eligiblePuts()}">0</dd></div>
+            <div><dt>Pairs scored</dt><dd th:text="${scan.pairsEvaluated()}">0</dd></div>
+            <div><dt>Shown</dt><dd th:text="${#lists.size(scan.candidates())}">0</dd></div>
+        </dl>
+
+        <details class="filtered">
+            <summary>Filtered options: why legs were excluded, and which legs passed</summary>
+            <div class="filtered-grid">
+                <table class="mini">
+                    <caption>Exclusions by first failing rule</caption>
+                    <thead><tr><th scope="col">Reason</th><th scope="col">Calls</th><th scope="col">Puts</th></tr></thead>
+                    <tbody>
+                    <tr th:each="r : ${@fmt.rejections(scan.callRejections(), scan.putRejections())}">
+                        <td th:text="${r.label()}">Delta outside range</td>
+                        <td class="num" th:text="${r.calls()}">0</td>
+                        <td class="num" th:text="${r.puts()}">0</td>
+                    </tr>
+                    </tbody>
+                </table>
+                <th:block th:each="side : ${ {'Eligible puts', 'Eligible calls'} }">
+                    <table class="mini legs sortable">
+                        <caption th:text="${side}">Eligible legs</caption>
+                        <thead><tr>
+                            <th scope="col" data-sort="text">Exp</th><th scope="col" data-sort="num">Strike</th>
+                            <th scope="col" data-sort="num">Delta</th><th scope="col" data-sort="num">Theta</th>
+                            <th scope="col" data-sort="num">Bid</th><th scope="col" data-sort="num">Ask</th>
+                            <th scope="col" data-sort="num">Mid</th><th scope="col" data-sort="num">OI</th>
+                            <th scope="col" data-sort="num">Vol</th>
+                        </tr></thead>
+                        <tbody>
+                        <tr th:each="o : ${side == 'Eligible puts' ? scan.eligiblePutLegs() : scan.eligibleCallLegs()}">
+                            <td th:attr="data-v=${o.contract().expiration()}" th:text="${@fmt.shortDate(o.contract().expiration())}">Aug 21</td>
+                            <td class="num" th:attr="data-v=${o.strike()}" th:text="${@fmt.strike(o.strike())}">$625</td>
+                            <td class="num" th:attr="data-v=${o.greeks().delta()}" th:text="${@fmt.delta(o.greeks().delta())}">-0.070</td>
+                            <td class="num" th:attr="data-v=${o.greeks().theta()}" th:text="${@fmt.theta(o.greeks().theta())}">-0.016</td>
+                            <td class="num bid" th:attr="data-v=${o.quote().bid()}" th:text="${@fmt.price(o.quote().bid())}">0.28</td>
+                            <td class="num ask" th:attr="data-v=${o.quote().ask()}" th:text="${@fmt.price(o.quote().ask())}">0.32</td>
+                            <td class="num" th:attr="data-v=${o.quote().mid()}" th:text="${@fmt.precise(o.quote().mid())}">0.30</td>
+                            <td class="num" th:attr="data-v=${o.openInterest()}" th:text="${@fmt.count(o.openInterest())}">1,000</td>
+                            <td class="num" th:attr="data-v=${o.volume()}" th:text="${@fmt.count(o.volume())}">500</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </th:block>
+            </div>
+        </details>
+
+        <div class="scanner-grid" th:if="${!#lists.isEmpty(scan.candidates())}">
+            <div class="table-wrap">
+                <table class="candidates sortable">
+                    <thead>
+                    <tr>
+                        <th scope="col" data-sort="num">Rank</th>
+                        <th scope="col" data-sort="text">Expiration</th>
+                        <th scope="col" data-sort="num">DTE</th>
+                        <th scope="col" data-sort="num">Put strike</th>
+                        <th scope="col" data-sort="num">Put delta</th>
+                        <th scope="col" data-sort="num">Put theta</th>
+                        <th scope="col" data-sort="num">Call strike</th>
+                        <th scope="col" data-sort="num">Call delta</th>
+                        <th scope="col" data-sort="num">Call theta</th>
+                        <th scope="col" data-sort="num">IV</th>
+                        <th scope="col" data-sort="num">Premium</th>
+                        <th scope="col" data-sort="num">Per contract</th>
+                        <th scope="col" data-sort="num">Lower BE</th>
+                        <th scope="col" data-sort="num">Upper BE</th>
+                        <th scope="col" data-sort="num">POP est.</th>
+                        <th scope="col" data-sort="num">Liquidity</th>
+                        <th scope="col" data-sort="num">Score</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr class="cand" tabindex="0" th:each="c : ${scan.candidates()}"
+                        th:attr="data-id=${c.rank()},data-put=${c.shortPut().symbol()},data-call=${c.shortCall().symbol()}">
+                        <td class="num" th:attr="data-v=${c.rank()}" th:text="${c.rank()}">1</td>
+                        <td th:attr="data-v=${c.metrics().expiration()}" th:text="${@fmt.shortDate(c.metrics().expiration())}">Aug 21</td>
+                        <td class="num" th:attr="data-v=${c.metrics().dte()}" th:text="${c.metrics().dte()}">12</td>
+                        <td class="num" th:attr="data-v=${c.shortPut().strike()}" th:text="${@fmt.strike(c.shortPut().strike())}">$625</td>
+                        <td class="num" th:attr="data-v=${c.shortPut().greeks().delta()}" th:text="${@fmt.delta(c.shortPut().greeks().delta())}">-0.07</td>
+                        <td class="num" th:attr="data-v=${c.shortPut().greeks().theta()}" th:text="${@fmt.theta(c.shortPut().greeks().theta())}">-0.016</td>
+                        <td class="num" th:attr="data-v=${c.shortCall().strike()}" th:text="${@fmt.strike(c.shortCall().strike())}">$680</td>
+                        <td class="num" th:attr="data-v=${c.shortCall().greeks().delta()}" th:text="${@fmt.delta(c.shortCall().greeks().delta())}">0.08</td>
+                        <td class="num" th:attr="data-v=${c.shortCall().greeks().theta()}" th:text="${@fmt.theta(c.shortCall().greeks().theta())}">-0.018</td>
+                        <td class="num" th:attr="data-v=${c.metrics().impliedVolatility()}" th:text="${@fmt.iv(c.metrics().impliedVolatility())}">14%</td>
+                        <td class="num strong" th:attr="data-v=${c.metrics().totalPremium()}" th:text="${@fmt.usd(c.metrics().totalPremium())}">$0.675</td>
+                        <td class="num" th:attr="data-v=${c.metrics().premiumPerContract()}" th:text="${@fmt.usd(c.metrics().premiumPerContract())}">$67.50</td>
+                        <td class="num" th:attr="data-v=${c.metrics().lowerBreakeven()}" th:text="${@fmt.precise(c.metrics().lowerBreakeven())}">624.325</td>
+                        <td class="num" th:attr="data-v=${c.metrics().upperBreakeven()}" th:text="${@fmt.precise(c.metrics().upperBreakeven())}">680.675</td>
+                        <td class="num" th:attr="data-v=${c.metrics().probabilityOfProfit()}" th:text="${@fmt.pct(c.metrics().probabilityOfProfit())}">85%</td>
+                        <td class="num" th:attr="data-v=${c.scoreBreakdown().liquidity()}" th:text="${@fmt.score(c.scoreBreakdown().liquidity() * 100)}">70</td>
+                        <td class="num score" th:attr="data-v=${c.score()}" th:text="${@fmt.score(c.score())}">82.4</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <aside class="detail-pane" aria-live="polite">
+                <article class="detail" th:each="c : ${scan.candidates()}" th:id="${'cand-' + c.rank()}" th:hidden="${c.rank() != 1}">
+                    <header class="detail-head">
+                        <div>
+                            <p class="detail-rank" th:text="${'Rank ' + c.rank()}">Rank 1</p>
+                            <h3 th:text="${scan.symbol() + ' ' + @fmt.strike(c.shortPut().strike()) + ' put / ' + @fmt.strike(c.shortCall().strike()) + ' call'}">SPY $625 / $680</h3>
+                        </div>
+                        <div class="score-badge"><span th:text="${@fmt.score(c.score())}">82.4</span><small>score</small></div>
+                    </header>
+
+                    <dl class="kv two">
+                        <div><dt>Underlying</dt><dd th:text="${scan.symbol()}">SPY</dd></div>
+                        <div><dt>Current price</dt><dd th:text="${'$' + @fmt.price(c.metrics().underlyingPrice())}">$650.00</dd></div>
+                        <div><dt>Expiration</dt><dd th:text="${@fmt.longDate(c.metrics().expiration())}">Aug 21, 2026</dd></div>
+                        <div><dt>DTE</dt><dd th:text="${c.metrics().dte()}">12</dd></div>
+                    </dl>
+
+                    <div class="legs-grid">
+                        <section class="leg leg-put-card" th:with="o=${c.shortPut()}">
+                            <h4>Short put</h4>
+                            <dl class="kv">
+                                <div><dt>Strike</dt><dd th:text="${@fmt.strike(o.strike())}"></dd></div>
+                                <div><dt>Delta</dt><dd th:text="${@fmt.delta(o.greeks().delta())}"></dd></div>
+                                <div><dt>Theta</dt><dd th:text="${@fmt.theta(o.greeks().theta())}"></dd></div>
+                                <div><dt>Bid</dt><dd class="bid" th:text="${@fmt.price(o.quote().bid())}"></dd></div>
+                                <div><dt>Ask</dt><dd class="ask" th:text="${@fmt.price(o.quote().ask())}"></dd></div>
+                                <div><dt>Mid</dt><dd th:text="${@fmt.precise(o.quote().mid())}"></dd></div>
+                                <div><dt>Bid / Ask size</dt><dd th:text="${@fmt.count(o.quote().bidSize()) + ' / ' + @fmt.count(o.quote().askSize())}"></dd></div>
+                                <div><dt>Last trade</dt><dd th:text="${@fmt.price(o.lastPrice())}"></dd></div>
+                                <div><dt>Gamma</dt><dd th:text="${@fmt.greek(o.greeks().gamma())}"></dd></div>
+                                <div><dt>Vega</dt><dd th:text="${@fmt.greek(o.greeks().vega())}"></dd></div>
+                                <div><dt>IV</dt><dd th:text="${@fmt.iv(o.greeks().impliedVolatility())}"></dd></div>
+                                <div><dt>Volume</dt><dd th:text="${@fmt.count(o.volume())}"></dd></div>
+                                <div><dt>Open interest</dt><dd th:text="${@fmt.count(o.openInterest())}"></dd></div>
+                                <div><dt>Distance</dt><dd th:text="${@fmt.pct(c.metrics().putDistancePct())}"></dd></div>
+                            </dl>
+                            <p class="symbol-note" th:text="${o.symbol()}"></p>
+                        </section>
+                        <section class="leg leg-call-card" th:with="o=${c.shortCall()}">
+                            <h4>Short call</h4>
+                            <dl class="kv">
+                                <div><dt>Strike</dt><dd th:text="${@fmt.strike(o.strike())}"></dd></div>
+                                <div><dt>Delta</dt><dd th:text="${@fmt.delta(o.greeks().delta())}"></dd></div>
+                                <div><dt>Theta</dt><dd th:text="${@fmt.theta(o.greeks().theta())}"></dd></div>
+                                <div><dt>Bid</dt><dd class="bid" th:text="${@fmt.price(o.quote().bid())}"></dd></div>
+                                <div><dt>Ask</dt><dd class="ask" th:text="${@fmt.price(o.quote().ask())}"></dd></div>
+                                <div><dt>Mid</dt><dd th:text="${@fmt.precise(o.quote().mid())}"></dd></div>
+                                <div><dt>IV</dt><dd th:text="${@fmt.iv(o.greeks().impliedVolatility())}"></dd></div>
+                                <div><dt>Volume</dt><dd th:text="${@fmt.count(o.volume())}"></dd></div>
+                                <div><dt>Open interest</dt><dd th:text="${@fmt.count(o.openInterest())}"></dd></div>
+                                <div><dt>Distance</dt><dd th:text="${@fmt.pct(c.metrics().callDistancePct())}"></dd></div>
+                            </dl>
+                            <p class="symbol-note" th:text="${o.symbol()}"></p>
+                        </section>
+                    </div>
+
+                    <div class="totals-grid">
+                        <dl class="kv totals">
+                            <div class="big"><dt>Total premium</dt><dd th:text="${@fmt.usd(c.metrics().totalPremium())}">$0.675</dd></div>
+                            <div class="big"><dt>Premium / contract</dt><dd th:text="${@fmt.usd(c.metrics().premiumPerContract())}">$67.50</dd></div>
+                            <div><dt>Natural credit (bids)</dt><dd th:text="${@fmt.usd(c.metrics().naturalCredit())}"></dd></div>
+                            <div><dt>Lower breakeven</dt><dd th:text="${'$' + @fmt.precise(c.metrics().lowerBreakeven()) + ' (' + @fmt.pct(c.metrics().lowerBreakevenDistancePct()) + ')'}"></dd></div>
+                            <div><dt>Upper breakeven</dt><dd th:text="${'$' + @fmt.precise(c.metrics().upperBreakeven()) + ' (' + @fmt.pct(c.metrics().upperBreakevenDistancePct()) + ')'}"></dd></div>
+                            <div><dt>Expected move (1σ)</dt><dd th:text="${@fmt.dollars(c.metrics().expectedMove())}"></dd></div>
+                            <div><dt>Reference IV</dt><dd th:text="${@fmt.iv(c.metrics().impliedVolatility())}"></dd></div>
+                            <div><dt>Cushion put / call</dt><dd th:text="${@fmt.number(c.metrics().putCushion()) + ' / ' + @fmt.number(c.metrics().callCushion()) + ' EM'}"></dd></div>
+                            <div><dt>POP estimate</dt><dd th:text="${@fmt.pct(c.metrics().probabilityOfProfit())}"></dd></div>
+                            <div><dt>Theta / day / contract</dt><dd th:text="${@fmt.dollars(c.metrics().thetaPerDay())}"></dd></div>
+                            <div><dt>Position delta</dt><dd th:text="${@fmt.delta(c.metrics().positionDelta())}"></dd></div>
+                            <div><dt>Position gamma / vega</dt><dd th:text="${@fmt.greek(c.metrics().positionGamma()) + ' / ' + @fmt.greek(c.metrics().positionVega())}"></dd></div>
+                            <div><dt>Liquidity</dt><dd th:text="${@fmt.score(c.scoreBreakdown().liquidity() * 100) + ' / 100'}"></dd></div>
+                        </dl>
+
+                        <figure class="ladder" th:with="l=${@fmt.ladder(c)}">
+                            <div class="ladder-track">
+                                <div class="profit-zone" th:style="${'top:' + l.zoneTop() + '%;height:' + l.zoneHeight() + '%'}"></div>
+                                <div class="mark" th:each="m : ${l.marks()}" th:classappend="${'mark-' + m.kind()}" th:style="${'top:' + m.topPct() + '%'}">
+                                    <span class="mark-label" th:text="${m.label()}"></span>
+                                    <span class="mark-value" th:text="${m.value()}"></span>
+                                </div>
+                            </div>
+                            <figcaption>Price at expiration. The shaded band between breakevens is the profit zone.</figcaption>
+                        </figure>
+                    </div>
+
+                    <section class="breakdown">
+                        <h4>Score breakdown</h4>
+                        <ul>
+                            <li th:each="f : ${@fmt.factors(c)}">
+                                <span class="f-name" th:text="${f.label()}">Premium</span>
+                                <span class="f-weight" th:text="${'weight ' + f.weight()}">25%</span>
+                                <span class="f-bar" aria-hidden="true"><span th:style="${'width:' + f.pct() + '%'}"></span></span>
+                                <span class="f-val" th:text="${f.pct()}">80</span>
+                            </li>
+                        </ul>
+                    </section>
+
+                    <ul class="flags" th:if="${!#lists.isEmpty(c.flags())}">
+                        <li th:each="flag : ${c.flags()}" th:text="${flag}">flag</li>
+                    </ul>
+                </article>
+            </aside>
+        </div>
+    </section>
+    <div class="alert soft" th:if="${scan == null and scanError != null and error == null}" th:text="${scanError}">scan error</div>
+</main>
+
+<footer class="risk">
+    <h2>Risk disclosure</h2>
+    <p>This scanner identifies potential premium-selling setups. It does not place trades and does not predict profit.
+        Short calls carry theoretically unlimited loss and short puts substantial downside. Options can be assigned early.
+        Delta shifts as the underlying moves, gamma risk grows into expiration, IV changes reprice both legs, and wide
+        markets cost real money on entry and exit. Check margin and buying-power requirements with your broker.</p>
+</footer>
+
+<script th:src="@{/js/app.js}" src="/js/app.js"></script>
+</body>
+</html>
