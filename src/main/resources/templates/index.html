@@ -323,6 +323,10 @@
                                 <div><dt>Bid</dt><dd class="bid" th:text="${@fmt.price(o.quote().bid())}"></dd></div>
                                 <div><dt>Ask</dt><dd class="ask" th:text="${@fmt.price(o.quote().ask())}"></dd></div>
                                 <div><dt>Mid</dt><dd th:text="${@fmt.precise(o.quote().mid())}"></dd></div>
+                                <div><dt>Bid / Ask size</dt><dd th:text="${@fmt.count(o.quote().bidSize()) + ' / ' + @fmt.count(o.quote().askSize())}"></dd></div>
+                                <div><dt>Last trade</dt><dd th:text="${@fmt.price(o.lastPrice())}"></dd></div>
+                                <div><dt>Gamma</dt><dd th:text="${@fmt.greek(o.greeks().gamma())}"></dd></div>
+                                <div><dt>Vega</dt><dd th:text="${@fmt.greek(o.greeks().vega())}"></dd></div>
                                 <div><dt>IV</dt><dd th:text="${@fmt.iv(o.greeks().impliedVolatility())}"></dd></div>
                                 <div><dt>Volume</dt><dd th:text="${@fmt.count(o.volume())}"></dd></div>
                                 <div><dt>Open interest</dt><dd th:text="${@fmt.count(o.openInterest())}"></dd></div>

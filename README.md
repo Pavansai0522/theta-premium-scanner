@@ -29,7 +29,20 @@ mvn spring-boot:run
 # open http://localhost:8080   (e.g. http://localhost:8080/scan?symbol=SPY)
 ```
 
-On Windows PowerShell, use `$env:ALPACA_API_KEY="..."` instead of `export`. A `.env.example` file is included for reference.
+On Windows PowerShell, use `$env:ALPACA_API_KEY="..."` instead of `export`.
+
+**Alternative: a `.env` file.** Copy `.env.example` to `.env` in the project root and fill in the keys.
+It is loaded automatically (`spring.config.import: optional:file:.env[.properties]`) and is git-ignored.
+Use plain `KEY=value` lines: no quotes, no `export`.
+
+Once running:
+
+| URL | What |
+|---|---|
+| http://localhost:8080 | Scanner UI |
+| http://localhost:8080/scan?symbol=SPY | Direct scan |
+| http://localhost:8080/swagger-ui.html | Interactive API docs (Swagger UI) |
+| http://localhost:8080/v3/api-docs | OpenAPI spec (JSON); a copy is committed at `docs/openapi.json` |
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -82,6 +95,26 @@ If the keys are missing, the application still starts. Every scan then returns a
 **Package layout** (`com.premiumscanner`): `client` (HTTP + DTOs), `config`, `domain`
 (immutable records), `exception`, `service`, `web`.
 
+The class names follow the suggested design: `AlpacaClient`, `AlpacaOptionService`, `OptionChainService`,
+`OptionFilterService`, `StrangleService`, `StrangleRankingService`, `OptionCalculationService`, with the
+models `OptionContract`, `OptionSnapshot`, `OptionQuote`, `OptionGreeks`, `OptionChain`, `ExpirationGroup`,
+`StrangleCandidate` and `StrategyParameters`.
+
+### Technology choices
+Java 17, Spring Boot 3.3, Maven, Thymeleaf, plus springdoc-openapi for the API docs. All of it is the
+preferred stack. Thymeleaf keeps the application in one Spring Boot process: one build, one
+`mvn spring-boot:run`, no Node toolchain or separate frontend deployment. The Alpaca credentials also
+never reach the browser, because all Alpaca calls are made server to server. About 100 lines of vanilla
+JavaScript add expand/collapse, sorting and candidate selection, and the page still renders without it.
+A React or Angular client could sit on the existing REST endpoints without backend changes.
+
+### UI and REST share one service layer
+The suggested architecture routes the UI through the REST API. Here the Thymeleaf controller and the
+REST controller are **both thin adapters over the same strategy services**. The UI is server-rendered in
+the same JVM, so calling our own API over HTTP would only add a network hop and a JSON round trip. The
+behaviour is identical: `/scan?symbol=SPY` and `/api/options/strangle/SPY` produce the same numbers.
+The strategy layer has no HTTP or Alpaca dependency; its unit tests run without either.
+
 ### Design decisions worth knowing
 - **Three Alpaca endpoints, not one.** Option snapshots do not include open interest or the
   underlying price. OI is read from the Trading API contracts endpoint and merged by OCC symbol.
@@ -106,6 +139,9 @@ If the keys are missing, the application still starts. Every scan then returns a
 ---
 
 ## 3. REST API
+
+**Interactive docs:** http://localhost:8080/swagger-ui.html. **OpenAPI spec:** `docs/openapi.json`
+(import it into Postman or any Swagger editor).
 
 All endpoints are `GET`, read-only, and return JSON. Parameters left out of a request use the
 configured defaults (section 5).
@@ -224,13 +260,13 @@ TSLA), adjust the parameters if needed, and press **Scan**.
 - The layout is two-sided: **Calls (Ask | Theta | Bid) | Strike | Puts (Bid | Theta | Ask)**. Asks are red and bids are green.
 - Rows alternate in shading. In-the-money cells have a warm tint.
 - A blue divider line marks the current underlying price.
-- Each expiration has a header row showing the date, a `(W)` tag for non-monthlies, the 100 multiplier, and DTE. Click the row (or press Enter) to expand or collapse it; *Expand all* and *Collapse all* are also available.
+- Each expiration has a header row showing the date, a `(W)` tag for non-monthlies, the 100 multiplier, and DTE. Click the row (or press Enter) to expand it: only one expiration is open at a time (▼ collapsed, ▲ open), and *Collapse all* closes them.
 - A dash means Alpaca returned no value for that field. Hovering a missing theta explains why.
 
-**Section B: recommended short strangles**
+**Section B: Recommended Short Strangle Candidates**
 - The **funnel** shows OTM legs fetched, legs passing the filters, pairs scored, and pairs shown.
 - **Filtered options** (expandable) shows how many legs each rule excluded, per side, plus sortable tables of every eligible put and call.
-- The **candidate table** is sortable: click any header.
+- The **candidate table** shows rank, expiration, DTE, both strikes with their delta and theta, IV, premium, per-contract premium, breakevens, POP estimate, liquidity and score. It is sortable: click any header.
 - **Selecting a row** opens its details and outlines its two legs in the chain above, expanding that expiration if needed. Details include:
   - both legs' Greeks, quotes, IV, volume, OI and distance
   - total and per-contract premium, natural credit (bids only), breakevens with distance
@@ -239,7 +275,7 @@ TSLA), adjust the parameters if needed, and press **Scan**.
   - the **score breakdown** with each factor and its weight
   - risk flags
 
-Screenshots are in `docs/screenshots/`.
+Screenshots are in section 12 and in `docs/screenshots/`.
 
 ---
 
@@ -313,7 +349,11 @@ Weights live in `scanner.weights` and are normalised, so they do not need to sum
 - **The DTE fit is gentle.** Every DTE inside your window is acceptable; the middle is slightly preferred.
 - **Delta balance** favours positions that start close to delta-neutral.
 
-Ties are broken by higher premium. Each candidate also carries **flags**:
+Ties are broken by higher premium. Results are capped at **5 per expiration**
+(`scanner.pairing.max-per-expiration`), so the list shows distinct trades across expirations rather
+than many strike variations of the same trade. That is why a scan can show fewer than `topN` results.
+
+Each candidate also carries **flags**:
 - a breakeven inside one expected move
 - a spread wider than 25% of mid
 - 0DTE, or expiration within 3 days
@@ -399,3 +439,23 @@ places no trades. The risks include:
 - IV expansion repricing both legs against you
 - liquidity and slippage on entry and exit
 - margin requirements
+
+---
+
+## 12. Screenshots
+
+Captured from a live run against the Alpaca paper account (indicative feed, 29 Sep 2026).
+
+| | |
+|---|---|
+| **Start page and parameters** | ![Start page](docs/screenshots/00-home.png) |
+| **Option chain** (grouped by expiration, DTE) | ![Option chain](docs/screenshots/01-option-chain.png) |
+| **Expanded expiration** (accordion, ITM shading) | ![Expanded expiration](docs/screenshots/02-expanded-expiration.png) |
+| **Selected candidate's leg outlined in the chain** | ![Selected legs](docs/screenshots/03-selected-legs-in-chain.png) |
+| **Filtered options** (funnel, exclusion reasons, eligible legs) | ![Filtered options](docs/screenshots/04-filtered-options.png) |
+| **Short strangle candidates and details** (SPY) | ![SPY candidates](docs/screenshots/05-spy-candidates-and-details.png) |
+| **Candidate details: score breakdown** | ![Score breakdown](docs/screenshots/06-spy-score-breakdown.png) |
+| **Demo: QQQ** | ![QQQ](docs/screenshots/07-qqq-candidates.png) |
+| **Demo: AAPL** | ![AAPL](docs/screenshots/08-aapl-candidates.png) |
+| **API docs: Swagger, spec example request, 200** | ![Swagger 200](docs/screenshots/09-swagger-200.png) |
+| **API validation: invalid parameters, 400** | ![Validation 400](docs/screenshots/10-api-validation-400.png) |
